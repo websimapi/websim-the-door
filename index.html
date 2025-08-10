@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>The Door</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <meta name="theme-color" content="#000000" />
+  </head>
+  <body>
+    <!-- Door Stage -->
+    <div id="stage">
+      <div id="door">
+        <div class="panel left"></div>
+        <div class="panel right"></div>
+        <button id="light-slit" aria-label="Hold and speak your destination">
+          <div class="glow"></div>
+        </button>
+      </div>
+
+      <!-- On-press HUD -->
+      <div id="hud">
+        <div class="mic">
+          <div class="ring ring1"></div>
+          <div class="ring ring2"></div>
+          <div class="dot"></div>
+        </div>
+        <div class="prompt">Hold the light and say where you want to go…</div>
+        <div class="transcript" id="transcript"></div>
+      </div>
+
+      <!-- Trippy fluid loading canvas (hidden at start) -->
+      <canvas id="trippy-canvas"></canvas>
+
+      <!-- Overlay for status messages -->
+      <div id="status" aria-live="polite"></div>
+    </div>
+
+    <!-- 3D world mount -->
+    <div id="world"></div>
+
+    <!-- Import map -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/",
+          "gsap": "https://cdn.skypack.dev/gsap@3.12.5"
+        }
+      }
+    </script>
+
+    <script type="module" src="./shader.js"></script>
+    <script type="module" src="./threeScene.js"></script>
+    <script type="module" src="./app.js"></script>
+  <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
