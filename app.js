@@ -234,10 +234,56 @@ Respond directly with JSON following this schema and no other text:
   background?: string; // CSS color
   fog?: { color: string; near?: number; far?: number; }
   palette: string[]; // array of hex colors
-  bounds?: { x: number; z: number; }
+  bounds?: { x: number; z: number; } // world half-extends used for distribution
   skyPrompt?: string; // prompt for a wide equirectangular sky matching the scene
   ground?: { color?: string; }
-  objects: {
+  // New hierarchical "entities" that are assembled from primitive layers.
+  entities?: {
+    name?: string;
+    count?: number; // number of instances to place (keep total across all entities reasonable: 10-60)
+    at?: {
+      area?: "random" | "grid";
+      within?: { x?: number; z?: number; }; // use to override global bounds for this entity
+      altitude?: number; // base Y
+    };
+    baseTransform?: { rotation?: [number,number,number]; scale?: [number,number,number]; };
+    // Recipe is a list of construction steps that add primitive parts to this entity's local group.
+    recipe: {
+      add: "box" | "sphere" | "cylinder" | "cone" | "torus" | "plane" | "icosahedron";
+      size?: number;              // generic size scalar
+      size3?: [number, number, number]; // optional non-uniform size (for box/plane)
+      radius?: number;            // for sphere/torus/cylinder/cone
+      tube?: number;              // torus tube radius
+      height?: number;            // cylinder/cone height
+      segments?: number;          // geometry detail (keep small: 8-32)
+      material?: {
+        color?: string;
+        metalness?: number;
+        roughness?: number;
+        emissive?: string | number;
+        emissiveIntensity?: number;
+      };
+      transform?: {
+        position?: [number, number, number];
+        rotation?: [number, number, number];
+        scale?: [number, number, number];
+      };
+      // Optional repetition helpers:
+      repeat?: {
+        times?: number;                  // linear repeat count
+        offset?: [number, number, number]; // per-copy offset (applied incrementally)
+        radial?: { count: number; radius: number; axis?: "x"|"y"|"z"; startAngle?: number; };
+      };
+    }[];
+    behaviors?: {
+      spin?: boolean | { axis?: [number,number,number]; speed?: number };
+      float?: boolean | { amp?: number; speed?: number };
+      bob?: boolean | { amp?: number; speed?: number }; // vertical oscillation alias
+      pulseEmissive?: boolean | { from?: number; to?: number; speed?: number };
+    };
+  }[];
+  // Back-compat fallback. If no entities are given, fill "objects" instead.
+  objects?: {
     shape: "sphere" | "box" | "torus" | "cone" | "cylinder";
     count?: number;
     size?: number; // base size
@@ -250,8 +296,13 @@ Respond directly with JSON following this schema and no other text:
     emissiveIntensity?: number;
   }[];
 }
-Keep counts reasonable for performance (10-60 objects total). Prefer evocative palettes and a good skyPrompt for ambience. If the user's prompt implies a theme (e.g., neon city, tranquil forest, space), reflect it.
-If unsafe or impossible, default to a surreal abstract garden with soft colors.
+Guidelines:
+- Keep counts reasonable for performance (10-60 total primitive meshes).
+- Prefer evocative palettes and a good skyPrompt for ambience.
+- If the user's prompt implies a theme (e.g., neon city, tranquil forest, space), reflect it.
+- When using entities, compose compelling silhouettes using 2-6 steps in the recipe.
+- Use low segment counts to stay performant on mobile.
+- If unsafe or impossible, default to a surreal abstract garden with soft colors using entities.
   `.trim();
 
   const completion = await websim.chat.completions.create({
@@ -269,11 +320,21 @@ If unsafe or impossible, default to a surreal abstract garden with soft colors.
   plan.seed ||= Math.floor(Math.random() * 1e9);
   plan.palette ||= ['#7afcff', '#feff9c', '#f400ff', '#b983ff', '#41ead4'];
   plan.bounds ||= { x: 40, z: 40 };
-  plan.objects = Array.isArray(plan.objects) ? plan.objects.slice(0, 5) : [];
+
+  // If both provided, prefer entities; otherwise keep objects fallback (trim for perf).
+  if (Array.isArray(plan.entities) && plan.entities.length) {
+    // Soft cap entity counts and recipe sizes
+    plan.entities = plan.entities.slice(0, 6);
+    for (const e of plan.entities) {
+      e.count = Math.max(1, Math.min(16, e.count || 6));
+      if (Array.isArray(e.recipe)) e.recipe = e.recipe.slice(0, 8);
+    }
+  } else {
+    plan.objects = Array.isArray(plan.objects) ? plan.objects.slice(0, 5) : [];
+  }
 
   // Store assistant message for future context
   window.conversationHistory.push({ role: 'assistant', content: completion.content });
 
   return plan;
 }
-
