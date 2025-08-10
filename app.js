@@ -229,7 +229,7 @@ async function getScenePlan(userPrompt) {
 You are a senior scene designer for a stylized Three.js world builder.
 You must output compact JSON for a world plan. Use only the supported schema and primitives.
 Your job is to turn the user's destination into an evocative place with at least one "hero" subject.
-If the user asks for a creature, character, animal, monster, or similar, you MUST assemble it from layered primitives using entities+recipe steps.
+If the user asks for a creature, character, animal, monster, vehicle, or architectural set-piece, you MUST assemble it from layered primitives using entities + recipe steps.
 
 Respond directly with JSON following exactly this schema and no other text:
 {
@@ -251,6 +251,9 @@ Respond directly with JSON following exactly this schema and no other text:
     };
     baseTransform?: { rotation?: [number,number,number]; scale?: [number,number,number]; };
     recipe: {
+      name?: string;                 // identifier used by later steps' attachTo
+      attachTo?: string;             // name of the parent part to attach to (if omitted, attaches to the entity root)
+      transformSpace?: "local"|"world"; // default "local" (local is recommended)
       add: "box" | "sphere" | "cylinder" | "cone" | "torus" | "plane" | "icosahedron";
       size?: number;
       size3?: [number, number, number];
@@ -264,6 +267,8 @@ Respond directly with JSON following exactly this schema and no other text:
         roughness?: number;
         emissive?: string | number;
         emissiveIntensity?: number;
+        opacity?: number;         // 0..1 (if < 1, part becomes transparent)
+        envMapIntensity?: number; // 0..2 reflection boost if a sky is present
       };
       transform?: {
         position?: [number, number, number];
@@ -274,6 +279,7 @@ Respond directly with JSON following exactly this schema and no other text:
         times?: number;
         offset?: [number, number, number];
         radial?: { count: number; radius: number; axis?: "x"|"y"|"z"; startAngle?: number; };
+        mirror?: { axes: ("x"|"y"|"z")[]; };
       };
     }[];
     behaviors?: {
@@ -302,130 +308,137 @@ Design constraints:
 - Target mobile performance. Keep total primitive meshes <= 80.
 - Use low geometry detail: segments 8–20 typical, max 32.
 - Prefer 1–3 hero subjects (count: 1–3) and then set dressing (count: 3–12) for environment.
-- Favor strong silhouettes using 2–6 recipe steps per entity.
-- Use the palette consistently. If emissive is used, keep intensities modest.
+- Favor strong silhouettes using 3–8 recipe steps per hero and 2–4 per prop.
+- Use the palette consistently. If emissive is used, keep intensities modest (<= 0.8).
 
-How to build creatures and complex subjects from primitives:
+How to build creatures, vehicles, props, and architecture from primitives:
 - Anatomy mapping
-  - Head: sphere or icosahedron. Add facial accents with small spheres/boxes.
-  - Torso: box or cylinder (horizontal). Taper by scaling Y/Z.
-  - Limbs: cylinders or cones for segments; hands/feet: small boxes/spheres.
-  - Wings/fins: planes or thin boxes; add torus for halos/rings if mystical.
-  - Spines/horns: cones; tails: cone chain or small cylinders with repeat.offset.
-  - Eyes: small spheres with emissive for glow.
-  - Shell/plates: boxes/planes with repeat.radial or repeat.times to form arrays.
+  - Heads: sphere or icosahedron. Facial accents with small spheres/boxes.
+  - Bodies/Torso: box or cylinder (horizontal/vertical). Taper via scale on Y/Z.
+  - Limbs: cylinders/cones; hands/feet: small boxes/spheres.
+  - Wings/fins/feathers: planes or thin boxes; halos/rings: torus.
+  - Horns/spines: cones; tails: chain built with repeat.times + repeat.offset.
+  - Eyes/jewels/cores: small spheres; give subtle emissive for glow.
+- Vehicles
+  - Hull: box/cylinder; cockpit: sphere/icosahedron; engine rings: torus; fins: planes.
+  - Wheels/landing gear: cylinders; repeated with radial or times+offset.
+- Architecture
+  - Columns: cylinders; beams: boxes; arches: torus segments or boxes plus cylinders; roofs: planes/boxes.
+  - Portals: torus + cylinder/box frame; crystals/lanterns: cones/icosahedrons with emissive.
 - Symmetry
-  - Mirror by placing left/right copies at ±X using repeat.times=2 with offset [-d,0,0] then manually place the mirrored counterpart with +d, or specify two recipe steps at positions x:-d and x:+d.
+  - Use repeat.mirror.axes: ["x"] (and/or "z") to generate mirrored counterparts automatically.
+  - For pairs (arms/legs/wings), either mirror or place two steps with positions at ±X.
+- Attachment & hierarchy
+  - Give important parts a name, then attach child parts with attachTo referencing that name.
+  - Keep transformSpace "local" so positions/rotations are relative to the parent.
+  - Example: name:"torso"; then attach head/arms/gear with attachTo:"torso".
 - Arrays
-  - repeat.times + repeat.offset for segment chains (tails, spines).
-  - repeat.radial for crown of spikes, petals, legs around a body.
+  - repeat.times + repeat.offset for tails, spine segments, stair steps, fence posts.
+  - repeat.radial for petals, crowns, wheel spokes, lantern halos, temple colonnades.
 - Motion
-  - behaviors.bob for idle life; spin on small accents (rings, halos); pulseEmissive for magical parts.
+  - behaviors.bob for idle life; spin on halos/rings/crystals; pulseEmissive on magical parts.
+- Materials
+  - Use palette colors. metalness 0.0–0.4 for matte, up to 0.7 for metallic accents.
+  - roughness 0.2–1.0; emissiveIntensity <= 0.8; opacity < 1 for thin wings or holograms.
+  - envMapIntensity 0.3–1.2 if a reflective look fits and a sky is present.
 
-Pattern Library (use as inspiration; adapt sizes/colors to the theme):
+Pattern Library (adapt sizes/colors to the theme; use names + attachTo for clarity):
 
-1) Biped Creature (humanoid)
+1) Biped (hero)
 {
   name: "biped",
   count: 1,
   at: { altitude: 0 },
   recipe: [
-    { add: "box", size3: [0.9,1.2,0.6], transform:{ position:[0,1.1,0] }, material:{ roughness:0.7 }}, // torso
-    { add: "sphere", radius: 0.45, transform:{ position:[0,2.1,0] }, material:{ emissive:"#111122", emissiveIntensity:0.2 }}, // head
-    { add: "cylinder", radius:0.12, height:0.9, segments:10, transform:{ position:[-0.35,1.0,0], rotation:[0,0,0] }}, // left upper arm
-    { add: "cylinder", radius:0.12, height:0.9, segments:10, transform:{ position:[0.35,1.0,0] }}, // right upper arm
-    { add: "cylinder", radius:0.15, height:1.1, transform:{ position:[-0.25,0.2,0] }}, // left leg
-    { add: "cylinder", radius:0.15, height:1.1, transform:{ position:[0.25,0.2,0] }},  // right leg
-    { add: "torus", radius:0.35, tube:0.04, segments:12, transform:{ position:[0,2.5,0], rotation:[Math.PI/2,0,0] }, material:{ emissive:"#6cf", emissiveIntensity:0.6 } } // halo ring
+    { name:"torso", add:"box", size3:[0.9,1.2,0.6], transform:{ position:[0,1.1,0] }, material:{ roughness:0.7 } },
+    { name:"head", attachTo:"torso", add:"sphere", radius:0.45, transform:{ position:[0,1.0,0] }, material:{ emissive:"#111122", emissiveIntensity:0.2 } },
+    { name:"armL", attachTo:"torso", add:"cylinder", radius:0.12, height:0.9, segments:10, transform:{ position:[-0.35, -0.1, 0] } },
+    { name:"armR", attachTo:"torso", add:"cylinder", radius:0.12, height:0.9, segments:10, transform:{ position:[0.35, -0.1, 0] } },
+    { name:"legL", attachTo:"torso", add:"cylinder", radius:0.15, height:1.1, transform:{ position:[-0.25, -0.9, 0] } },
+    { name:"legR", attachTo:"torso", add:"cylinder", radius:0.15, height:1.1, transform:{ position:[0.25, -0.9, 0] } },
+    { name:"halo", attachTo:"head", add:"torus", radius:0.35, tube:0.04, segments:12, transform:{ position:[0,0.4,0], rotation:[Math.PI/2,0,0] }, material:{ emissive:"#6cf", emissiveIntensity:0.6 } }
   ],
   behaviors:{ bob:{ amp:0.2, speed:1.0 }, pulseEmissive:{ from:0.2, to:0.7, speed:1.6 } }
 }
 
-2) Quadruped (wolf/deer-like)
+2) Quadruped
 {
   name:"quadruped",
   count:1,
-  at:{ altitude:0 },
   recipe:[
-    { add:"box", size3:[1.4,0.6,0.5], transform:{ position:[0,0.6,0] }}, // body
-    { add:"sphere", radius:0.35, transform:{ position:[0.8,0.9,0] }}, // head
-    { add:"cone", radius:0.08, height:0.3, transform:{ position:[0.9,1.2,0.15] }}, // ear L
-    { add:"cone", radius:0.08, height:0.3, transform:{ position:[0.9,1.2,-0.15] }}, // ear R
-    { add:"cylinder", radius:0.08, height:0.7, transform:{ position:[-0.5,0.35,0.25] }}, // FL
-    { add:"cylinder", radius:0.08, height:0.7, transform:{ position:[-0.5,0.35,-0.25] }}, // FR
-    { add:"cylinder", radius:0.08, height:0.7, transform:{ position:[0.4,0.35,0.25] }}, // BL
-    { add:"cylinder", radius:0.08, height:0.7, transform:{ position:[0.4,0.35,-0.25] }}, // BR
-    { add:"cone", radius:0.06, height:0.6, transform:{ position:[-0.9,0.8,0], rotation:[0,0,Math.PI/8] }, repeat:{ times:4, offset:[-0.02,-0.02,0] } } // mane/crest
+    { name:"body", add:"box", size3:[1.4,0.6,0.5], transform:{ position:[0,0.6,0] } },
+    { name:"head", attachTo:"body", add:"sphere", radius:0.35, transform:{ position:[0.8,0.3,0] } },
+    { attachTo:"head", add:"cone", radius:0.08, height:0.3, transform:{ position:[0.1,0.3,0.15] } },
+    { attachTo:"head", add:"cone", radius:0.08, height:0.3, transform:{ position:[0.1,0.3,-0.15] } },
+    { attachTo:"body", add:"cylinder", radius:0.08, height:0.7, transform:{ position:[-0.5,-0.25,0.25] }, repeat:{ mirror:{ axes:["z"] } } },
+    { attachTo:"body", add:"cylinder", radius:0.08, height:0.7, transform:{ position:[0.4,-0.25,0.25] }, repeat:{ mirror:{ axes:["z"] } } },
+    { attachTo:"body", add:"cone", radius:0.06, height:0.6, transform:{ position:[-0.9,0.2,0], rotation:[0,0,Math.PI/8] }, repeat:{ times:4, offset:[-0.02,-0.02,0] } }
   ],
   behaviors:{ bob:true }
 }
 
-3) Insectoid (6 legs)
+3) Insectoid (6 legs, attached wings)
 {
   name:"insectoid",
   count:1,
   recipe:[
-    { add:"sphere", radius:0.4, transform:{ position:[0,0.9,0] } }, // thorax
-    { add:"sphere", radius:0.3, transform:{ position:[0.5,0.9,0] } }, // head
-    { add:"sphere", radius:0.45, transform:{ position:[-0.6,0.9,0] } }, // abdomen
-    { add:"cylinder", radius:0.05, height:0.6, transform:{ position:[0.1,0.6,0.35], rotation:[0,0,Math.PI/2] }, repeat:{ radial:{ count:3, radius:0.35, axis:"y", startAngle:0 } } }, // right legs
-    { add:"cylinder", radius:0.05, height:0.6, transform:{ position:[0.1,0.6,-0.35], rotation:[0,0,Math.PI/2] }, repeat:{ radial:{ count:3, radius:0.35, axis:"y", startAngle:0 } } }, // left legs
-    { add:"plane", size3:[0.9,0.4,1], transform:{ position:[0,1.25,0], rotation:[Math.PI/10,0,0] } } // wings
+    { name:"thorax", add:"sphere", radius:0.4, transform:{ position:[0,0.9,0] } },
+    { name:"head", attachTo:"thorax", add:"sphere", radius:0.3, transform:{ position:[0.5,0.0,0] } },
+    { name:"abdomen", attachTo:"thorax", add:"sphere", radius:0.45, transform:{ position:[-0.6,0.0,0] } },
+    { attachTo:"thorax", add:"cylinder", radius:0.05, height:0.6, transform:{ position:[0.1,-0.3,0.35], rotation:[0,0,Math.PI/2] }, repeat:{ radial:{ count:3, radius:0.35, axis:"y", startAngle:0 }, mirror:{ axes:["z"] } } },
+    { attachTo:"thorax", add:"plane", size3:[0.9,0.4,1], transform:{ position:[0,0.35,0], rotation:[Math.PI/10,0,0] }, material:{ opacity:0.7 } }
   ],
   behaviors:{ bob:{ amp:0.15, speed:1.4 } }
 }
 
-4) Bird
+4) Bird (mirrored wings)
 {
   name:"bird",
   count:1,
   recipe:[
-    { add:"sphere", radius:0.35, transform:{ position:[0,1.2,0] } }, // body
-    { add:"sphere", radius:0.22, transform:{ position:[0.35,1.35,0] } }, // head
-    { add:"cone", radius:0.06, height:0.18, transform:{ position:[0.5,1.33,0] } }, // beak
-    { add:"plane", size3:[0.7,0.18,1], transform:{ position:[0,1.2,0.28], rotation:[0,0,Math.PI/16] } }, // wing R
-    { add:"plane", size3:[0.7,0.18,1], transform:{ position:[0,1.2,-0.28], rotation:[0,0,-Math.PI/16] } } // wing L
+    { name:"body", add:"sphere", radius:0.35, transform:{ position:[0,1.2,0] } },
+    { name:"head", attachTo:"body", add:"sphere", radius:0.22, transform:{ position:[0.35,0.15,0] } },
+    { attachTo:"head", add:"cone", radius:0.06, height:0.18, transform:{ position:[0.15,-0.02,0] } },
+    { attachTo:"body", add:"plane", size3:[0.7,0.18,1], transform:{ position:[0,0.0,0.28], rotation:[0,0,Math.PI/16] }, repeat:{ mirror:{ axes:["z"] } } }
   ],
   behaviors:{ float:{ amp:0.3, speed:1.0 } }
 }
 
-5) Fish
+5) Fish (tail chain)
 {
   name:"fish",
   count:1,
   recipe:[
-    { add:"box", size3:[1.0,0.35,0.25], transform:{ position:[0,0.8,0] } }, // body
-    { add:"cone", radius:0.15, height:0.3, transform:{ position:[-0.6,0.8,0], rotation:[0,0,Math.PI] } }, // tail
-    { add:"plane", size3:[0.3,0.18,1], transform:{ position:[-0.1,0.97,0] } }, // dorsal
-    { add:"plane", size3:[0.35,0.18,1], transform:{ position:[0.0,0.7,0.15] } }, // fin R
-    { add:"plane", size3:[0.35,0.18,1], transform:{ position:[0.0,0.7,-0.15] } } // fin L
+    { name:"body", add:"box", size3:[1.0,0.35,0.25], transform:{ position:[0,0.8,0] } },
+    { attachTo:"body", add:"cone", radius:0.15, height:0.3, transform:{ position:[-0.6,0.0,0], rotation:[0,0,Math.PI] } },
+    { attachTo:"body", add:"plane", size3:[0.3,0.18,1], transform:{ position:[-0.05,0.17,0] } },
+    { attachTo:"body", add:"plane", size3:[0.35,0.18,1], transform:{ position:[0.0,-0.1,0.15] }, repeat:{ mirror:{ axes:["z"] } } }
   ],
   behaviors:{ float:{ amp:0.25, speed:0.8 } }
 }
 
-6) Wyvern/Dragon (minimal)
+6) Wyvern / Dragon (segmented tail, mirrored wings)
 {
   name:"wyvern",
   count:1,
   recipe:[
-    { add:"cylinder", radius:0.18, height:1.6, transform:{ position:[0,1.1,0], rotation:[0,0,Math.PI/2] } }, // body
-    { add:"cone", radius:0.22, height:0.5, transform:{ position:[0.9,1.2,0] } }, // head
-    { add:"cone", radius:0.06, height:0.5, transform:{ position:[-0.8,1.1,0] }, repeat:{ times:5, offset:[-0.1,0,0] } }, // tail segments
-    { add:"plane", size3:[1.2,0.5,1], transform:{ position:[0.1,1.4,0.6], rotation:[0,0,Math.PI/8] } }, // wing R
-    { add:"plane", size3:[1.2,0.5,1], transform:{ position:[0.1,1.4,-0.6], rotation:[0,0,-Math.PI/8] } } // wing L
+    { name:"body", add:"cylinder", radius:0.18, height:1.6, transform:{ position:[0,1.1,0], rotation:[0,0,Math.PI/2] } },
+    { name:"head", attachTo:"body", add:"cone", radius:0.22, height:0.5, transform:{ position:[0.9,0.1,0] } },
+    { attachTo:"body", add:"cone", radius:0.06, height:0.5, transform:{ position:[-0.4,-0.0,0] }, repeat:{ times:5, offset:[-0.1,0,0] } },
+    { attachTo:"body", add:"plane", size3:[1.2,0.5,1], transform:{ position:[0.1,0.3,0.6], rotation:[0,0,Math.PI/8] }, repeat:{ mirror:{ axes:["z"] } } }
   ],
   behaviors:{ bob:{ amp:0.2, speed:1.2 }, pulseEmissive:{ from:0.1, to:0.5, speed:1.5 } }
 }
 
-7) Tree (stylized)
+7) Stylized Tree
 {
   name:"tree",
   count: 6,
   at:{ area:"random", within:{ x:18, z:18 }, altitude:0 },
   recipe:[
-    { add:"cylinder", radius:0.2, height:2.0, transform:{ position:[0,1.0,0] }, material:{ roughness:1, color:"#5a3b27" } }, // trunk
-    { add:"icosahedron", radius:0.9, transform:{ position:[0,2.0,0] }, material:{ color:"#2e8b57" } }, // canopy
-    { add:"icosahedron", radius:0.6, transform:{ position:[0.6,2.3,0.2] }, material:{ color:"#3aa567" } }
+    { name:"trunk", add:"cylinder", radius:0.2, height:2.0, transform:{ position:[0,1.0,0] }, material:{ roughness:1, color:"#5a3b27" } },
+    { attachTo:"trunk", add:"icosahedron", radius:0.9, transform:{ position:[0,1.0,0] }, material:{ color:"#2e8b57" } },
+    { attachTo:"trunk", add:"icosahedron", radius:0.6, transform:{ position:[0.6,1.3,0.2] }, material:{ color:"#3aa567" } }
   ]
 }
 
@@ -435,8 +448,8 @@ Pattern Library (use as inspiration; adapt sizes/colors to the theme):
   count: 10,
   at:{ area:"random", within:{ x:20, z:20 }, altitude:0 },
   recipe:[
-    { add:"cylinder", radius:0.08, height:0.6, transform:{ position:[0,0.3,0] }, material:{ color:"#f5f5dc" } },
-    { add:"cone", radius:0.35, height:0.3, transform:{ position:[0,0.65,0] }, material:{ color:"#e84393", emissive:"#330018", emissiveIntensity:0.2 } }
+    { name:"stem", add:"cylinder", radius:0.08, height:0.6, transform:{ position:[0,0.3,0] }, material:{ color:"#f5f5dc" } },
+    { attachTo:"stem", add:"cone", radius:0.35, height:0.3, transform:{ position:[0,0.35,0] }, material:{ color:"#e84393", emissive:"#330018", emissiveIntensity:0.2 } }
   ],
   behaviors:{ pulseEmissive:true }
 }
@@ -447,8 +460,8 @@ Pattern Library (use as inspiration; adapt sizes/colors to the theme):
   count: 4,
   at:{ area:"random", within:{ x:22, z:22 }, altitude:0 },
   recipe:[
-    { add:"cone", radius:0.6, height:3.6, transform:{ position:[0,1.8,0] }, material:{ color:"#7afcff", metalness:0.1, roughness:0.2, emissive:"#1d7a88", emissiveIntensity:0.25 } },
-    { add:"torus", radius:0.8, tube:0.04, segments:12, transform:{ position:[0,0.3,0], rotation:[Math.PI/2,0,0] }, material:{ emissive:"#7afcff", emissiveIntensity:0.6 } }
+    { name:"spire", add:"cone", radius:0.6, height:3.6, transform:{ position:[0,1.8,0] }, material:{ color:"#7afcff", metalness:0.1, roughness:0.2, emissive:"#1d7a88", emissiveIntensity:0.25, envMapIntensity:0.7 } },
+    { attachTo:"spire", add:"torus", radius:0.8, tube:0.06, transform:{ position:[0,-1.5,0], rotation:[Math.PI/2,0,0] }, material:{ emissive:"#7afcff", emissiveIntensity:0.6 } }
   ],
   behaviors:{ spin:{ axis:[0,1,0], speed:0.3 }, pulseEmissive:{ from:0.2, to:0.8, speed:1.8 } }
 }
@@ -458,10 +471,10 @@ Pattern Library (use as inspiration; adapt sizes/colors to the theme):
   name:"portal-arch",
   count:1,
   recipe:[
-    { add:"box", size3:[3.0,0.4,0.6], transform:{ position:[0,1.6,0] } }, // top
-    { add:"cylinder", radius:0.3, height:3.0, transform:{ position:[-1.35,0.8,0] } }, // left post
-    { add:"cylinder", radius:0.3, height:3.0, transform:{ position:[1.35,0.8,0] } }, // right post
-    { add:"torus", radius:0.9, tube:0.06, transform:{ position:[0,1.0,0], rotation:[Math.PI/2,0,0] }, material:{ emissive:"#f400ff", emissiveIntensity:0.7 } } // ring
+    { name:"beam", add:"box", size3:[3.0,0.4,0.6], transform:{ position:[0,1.6,0] } },
+    { name:"postL", add:"cylinder", radius:0.3, height:3.0, transform:{ position:[-1.35,0.8,0] } },
+    { name:"postR", add:"cylinder", radius:0.3, height:3.0, transform:{ position:[1.35,0.8,0] } },
+    { attachTo:"beam", add:"torus", radius:0.9, tube:0.06, transform:{ position:[0,-0.6,0], rotation:[Math.PI/2,0,0] }, material:{ emissive:"#f400ff", emissiveIntensity:0.7 } }
   ],
   behaviors:{ pulseEmissive:{ from:0.3, to:0.9, speed:1.2 } }
 }
@@ -470,10 +483,11 @@ Environment guidance:
 - Provide a skyPrompt that matches the theme (time of day, mood, weather).
 - Provide fog matching palette for depth; typical near 8–16, far 40–70.
 - Use bounds around x: 30–50, z: 30–50 unless a tight scene is intended.
+- Place at least one hero entity with count:1 within ±4 units of origin so it's immediately visible.
 
 Output tips:
 - If the user asks for a specific real creature (e.g., tiger), deliver a stylized abstracted version using the patterns above (body, limbs, head) rather than photo-real detail.
-- Include at least one hero entity with count: 1 near the origin (within x/z ±4) so it is immediately visible.
+- Include at least one hero entity with count: 1 near the origin (within x/z ±4).
 - Use low segments (8–16) for cylinders/cones/torus unless a focal element requires 20–32.
 - If uncertain, default to a surreal abstract garden with soft colors, a portal-arch, and one benign creature.
 
@@ -501,9 +515,9 @@ Output tips:
     plan.entities = plan.entities.slice(0, 7);
     for (const e of plan.entities) {
       e.count = Math.max(1, Math.min(16, e.count || 6));
-      if (Array.isArray(e.recipe)) e.recipe = e.recipe.slice(0, 8);
+      if (Array.isArray(e.recipe)) e.recipe = e.recipe.slice(0, 12);
       // Encourage hero near origin if a single subject
-      if ((e.count === 1 || /hero|dragon|portal|biped|quadruped|insect|bird|fish|wyvern|creature/i.test(e.name || '')) && (!e.at || !e.at.within)) {
+      if ((e.count === 1 || /hero|dragon|portal|biped|quadruped|insect|bird|fish|wyvern|creature|vehicle|arch|temple/i.test(e.name || '')) && (!e.at || !e.at.within)) {
         e.at = e.at || {};
         e.at.within = { x: 4, z: 4 };
         e.at.altitude = e.at.altitude ?? 0;

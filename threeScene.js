@@ -226,15 +226,33 @@ export class GeneratedWorld {
 function buildRecipeGroup(recipe, palette, rng) {
   const group = new THREE.Group();
   const steps = Array.isArray(recipe) ? recipe : [];
-  for (const step of steps) {
-    const meshes = instantiatePart(step, palette, rng);
-    for (const m of meshes) group.add(m);
+  const parts = new Map(); // name -> Object3D
+
+  for (let idx = 0; idx < steps.length; idx++) {
+    const step = steps[idx];
+    const created = instantiatePartWithContext(step, palette, rng, parts);
+    // Parent new parts either to an attach target or to root
+    let parent = group;
+    if (step && typeof step.attachTo === 'string' && parts.has(step.attachTo)) {
+      parent = parts.get(step.attachTo);
+    }
+    for (const obj of created) parent.add(obj);
+    // Register named parts
+    if (step && step.name) {
+      if (created.length === 1) {
+        parts.set(step.name, created[0]);
+      } else {
+        // If multiple, store the first instance under the given name, and also suffix-index keys
+        parts.set(step.name, created[0]);
+        created.forEach((o, i) => parts.set(`${step.name}[${i}]`, o));
+      }
+    }
   }
   return group;
 }
 
-// Create 1..N meshes for a single recipe step (supports repeat/radial)
-function instantiatePart(step, palette, rng) {
+// Create one or more meshes for a single step, with hierarchy awareness
+function instantiatePartWithContext(step, palette, rng, partsMap) {
   const {
     add = 'box',
     size,
@@ -255,6 +273,14 @@ function instantiatePart(step, palette, rng) {
     emissive: toColor(material.emissive) ?? 0x000000,
     emissiveIntensity: material.emissive ? (material.emissiveIntensity ?? 0.4) : 0
   });
+  if (typeof material.opacity === 'number' && material.opacity < 1) {
+    mat.transparent = true;
+    mat.opacity = Math.max(0.02, material.opacity);
+    mat.depthWrite = mat.opacity >= 0.5; // simple heuristic
+  }
+  if (typeof material.envMapIntensity === 'number') {
+    mat.envMapIntensity = material.envMapIntensity;
+  }
 
   const baseGeom = makeGeometry(add.toLowerCase(), {
     size: size ?? 1,
@@ -265,11 +291,12 @@ function instantiatePart(step, palette, rng) {
     segments: Math.max(6, Math.min(32, segments)),
   });
 
-  const meshes = [];
-
-  // Helper to create a mesh instance with applied transform
-  const createInstance = (pos = [0,0,0], rot = [0,0,0], scl = [1,1,1]) => {
+  const makeMesh = () => {
     const mesh = new THREE.Mesh(baseGeom, mat);
+    // Base local transform
+    const pos = transform.position || [0,0,0];
+    const rot = transform.rotation || [0,0,0];
+    const scl = transform.scale || [1,1,1];
     applyVec3(mesh.position, pos);
     applyEuler(mesh.rotation, rot);
     applyScale(mesh.scale, scl);
@@ -277,12 +304,22 @@ function instantiatePart(step, palette, rng) {
     return mesh;
   };
 
-  // Base transform for the first instance
+  // Instances from repeat settings
+  const instances = [];
+
+  const addInstanceAt = (pos = [0,0,0], rot = [0,0,0], scl = [1,1,1]) => {
+    const m = new THREE.Mesh(baseGeom, mat);
+    applyVec3(m.position, pos);
+    applyEuler(m.rotation, rot);
+    applyScale(m.scale, scl);
+    m.castShadow = true;
+    instances.push(m);
+  };
+
   const basePos = transform.position || [0,0,0];
   const baseRot = transform.rotation || [0,0,0];
   const baseScl = transform.scale || [1,1,1];
 
-  // Handle repetition
   if (repeat?.radial) {
     const count = Math.max(1, Math.min(64, repeat.radial.count || 6));
     const radiusR = repeat.radial.radius || 1.5;
@@ -301,7 +338,7 @@ function instantiatePart(step, palette, rng) {
         pos[0] += Math.cos(a) * radiusR;
         pos[1] += Math.sin(a) * radiusR;
       }
-      meshes.push(createInstance(pos, baseRot, baseScl));
+      addInstanceAt(pos, baseRot, baseScl);
     }
   } else if (repeat?.times && repeat.times > 1) {
     const times = Math.min(128, Math.max(1, repeat.times));
@@ -312,13 +349,39 @@ function instantiatePart(step, palette, rng) {
         basePos[1] + offset[1] * i,
         basePos[2] + offset[2] * i
       ];
-      meshes.push(createInstance(pos, baseRot, baseScl));
+      addInstanceAt(pos, baseRot, baseScl);
     }
   } else {
-    meshes.push(createInstance(basePos, baseRot, baseScl));
+    instances.push(makeMesh());
   }
 
-  return meshes;
+  // Mirror symmetry (adds mirrored counterparts)
+  if (repeat?.mirror && Array.isArray(repeat.mirror.axes) && repeat.mirror.axes.length) {
+    const axes = repeat.mirror.axes;
+    const mirrored = [];
+    for (const inst of instances) {
+      const m = inst.clone();
+      if (axes.includes('x')) {
+        m.position.x = -m.position.x;
+        m.rotation.y = -m.rotation.y;
+        m.rotation.z = -m.rotation.z;
+      }
+      if (axes.includes('y')) {
+        m.position.y = -m.position.y;
+        m.rotation.x = -m.rotation.x;
+        m.rotation.z = -m.rotation.z;
+      }
+      if (axes.includes('z')) {
+        m.position.z = -m.position.z;
+        m.rotation.x = -m.rotation.x;
+        m.rotation.y = -m.rotation.y;
+      }
+      mirrored.push(m);
+    }
+    instances.push(...mirrored);
+  }
+
+  return instances;
 }
 
 // Geometry factory for supported primitives
